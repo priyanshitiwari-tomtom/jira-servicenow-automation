@@ -1,130 +1,319 @@
-# JIRA to ServiceNow Automation Agent
+# Jira-ServiceNow Automation Agent
 
-This repository contains an automated workflow that:
-- Fetches update set links from ready-for-deployment stories in JIRA
-- Adds those update sets to a parent record in ServiceNow
-- Runs every Thursday at 9:00 AM UTC
+An intelligent automation agent that fetches update sets from Jira stories and creates parent update sets in ServiceNow with all related update sets as children.
 
-## Components
+## Features
 
-- **GitHub Actions Workflow**: Scheduled workflow (`.github/workflows/thursday-automation.yml`)
-- **JIRA Integration Script**: Fetches stories and update set links (`scripts/jira_fetch.py`)
-- **ServiceNow Integration Script**: Adds update sets to parent records (`scripts/servicenow_update.py`)
-- **Main Orchestrator**: Coordinates the workflow (`scripts/main.py`)
-- **Utilities**: Helper functions for logging and error handling (`scripts/utils.py`)
-
-## Quick Start
-
-### 1. Add GitHub Secrets
-
-Go to your repository Settings → Secrets and variables → Actions, and add:
-
-| Secret Name | Description | Example |
-|-------------|-------------|---------|
-| `JIRA_URL` | JIRA instance URL | `https://your-company.atlassian.net` |
-| `JIRA_USERNAME` | JIRA API username | `user@company.com` |
-| `JIRA_API_TOKEN` | JIRA API token | (Get from https://id.atlassian.com/manage-profile/security/api-tokens) |
-| `JIRA_PROJECT_KEY` | JIRA project key | `PROJ` |
-| `JIRA_STATUS_FILTER` | Status to filter by | `Ready for Deployment` |
-| `JIRA_UPDATE_SET_FIELD` | Custom field ID for update set links | `customfield_10050` |
-| `SERVICENOW_URL` | ServiceNow instance URL | `https://dev12345.service-now.com` |
-| `SERVICENOW_USERNAME` | ServiceNow API username | `api_user` |
-| `SERVICENOW_PASSWORD` | ServiceNow API password | (Use a service account with API access) |
-| `SERVICENOW_PARENT_TABLE` | Parent table name | `sn_chg_management_change` |
-| `SERVICENOW_PARENT_ID` | Parent record ID | `CHG0123456` |
-| `SERVICENOW_UPDATE_SET_FIELD` | Field name for update sets | `u_update_sets` |
-
-### 2. Configure Workflow Schedule
-
-Edit `.github/workflows/thursday-automation.yml` to customize:
-- **Time**: Change the cron schedule (currently 9:00 AM UTC every Thursday)
-- **Timezone**: Adjust if needed
-
-### 3. Run Manually
-
-To test the automation without waiting for Thursday:
-1. Go to Actions → Thursday JIRA-ServiceNow Sync
-2. Click "Run workflow" → "Run workflow"
-
-## How It Works
-
-1. **Trigger**: GitHub Actions runs every Thursday at 9:00 AM UTC
-2. **JIRA Query**: Fetches all issues with status "Ready for Deployment"
-3. **Extract Links**: Parses update set links from the configured custom field
-4. **ServiceNow Update**: Adds new update sets to the parent record
-5. **Logging**: Records all actions and errors
-6. **Notification**: (Optional) Posts results to Slack or email
+- 🔄 **Automatic Sync**: Periodically fetches Jira stories and syncs to ServiceNow
+- 📊 **Parent-Child Hierarchy**: Creates parent update sets with child relationships
+- 🛡️ **Error Handling**: Robust error handling and retry logic
+- 📝 **Logging**: Comprehensive logging for audit trail
+- 🔒 **Secure Configuration**: Environment-based credential management
+- 🧪 **Testable**: Unit tests and integration tests included
+- 📱 **State Tracking**: Maintains state to prevent duplicate syncs
 
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│         GitHub Actions (Thursday 9:00 AM UTC)                 │
-└───────────────────────────────┬───────────────────────────────┘
-                                │
-                                ▼
-                ┌───────────────────────────────────┐
-                │   main.py (Orchestrator)          │
-                └────────────────┬────────────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    ▼                         ▼
-            ┌──────────────────┐    ┌──────────────────────────────┐
-            │  jira_fetch      │    │  servicenow_update           │
-            └────────┬─────────┘    └─────────┬────────────────────┘
-                     ▼                         ▼
-                 JIRA API          ServiceNow API
+jira-servicenow-agent/
+├── src/
+│   ├── agent.py                 # Main agent orchestrator
+│   ├── jira_client.py          # Jira API integration
+│   ├── servicenow_client.py    # ServiceNow API integration
+│   ├── models.py               # Data models
+│   ├── config.py               # Configuration management
+│   ├── logger.py               # Logging setup
+│   ├── state_manager.py        # State persistence
+│   └── utils.py                # Utility functions
+├── tests/
+│   ├── test_agent.py
+│   ├── test_jira_client.py
+│   ├── test_servicenow_client.py
+│   └── fixtures.py
+├── state/                       # State files (created at runtime)
+├── logs/                        # Log files (created at runtime)
+├── main.py                      # Entry point
+├── requirements.txt
+├── .env.example
+└── README.md
+```
+
+## Prerequisites
+
+- Python 3.8+
+- Jira Cloud instance with API access
+- ServiceNow instance with API access
+- Git
+
+## Setup
+
+### 1. Clone Repository
+
+```bash
+git clone https://github.com/priyanshitiwari003-git/jira-servicenow-automation.git
+cd jira-servicenow-automation
+```
+
+### 2. Create Virtual Environment
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### 3. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configure Environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your credentials:
+
+#### Jira Configuration
+
+1. **JIRA_BASE_URL**: Your Jira instance URL (e.g., https://mycompany.atlassian.net)
+2. **JIRA_USERNAME**: Your Jira email
+3. **JIRA_API_TOKEN**: [Generate here](https://id.atlassian.com/manage-profile/security/api-tokens)
+4. **JIRA_PROJECT_KEY**: The project key containing your stories (e.g., PROJ)
+5. **JIRA_UPDATE_SET_FIELD**: Custom field ID storing update set names
+
+#### ServiceNow Configuration
+
+1. **SN_INSTANCE_URL**: Your ServiceNow instance URL
+2. **SN_USERNAME**: Your ServiceNow username
+3. **SN_PASSWORD**: Your ServiceNow password
+4. **SN_TABLE**: Table name (default: sn_chg_management_update_set)
+
+#### Agent Configuration
+
+- **RUN_INTERVAL_MINUTES**: How often to run the sync (default: 60)
+- **DRY_RUN**: Set to `True` to preview changes without applying them
+
+### 5. Create Directories
+
+```bash
+mkdir -p state logs
+```
+
+## Usage
+
+### Run Agent Once
+
+```bash
+python main.py --once
+```
+
+### Run Agent with Scheduling
+
+```bash
+python main.py --schedule
+```
+
+### Run with Dry Run (Preview)
+
+```bash
+python main.py --once --dry-run
+```
+
+### Run Tests
+
+```bash
+pytest tests/ -v
+pytest tests/ --cov=src  # With coverage
+```
+
+## How It Works
+
+### Workflow
+
+1. **Fetch Jira Stories**
+   - Queries Jira for stories in the configured project
+   - Extracts update set information from custom fields
+   - Filters out already processed stories using state tracking
+
+2. **Parse Update Sets**
+   - Groups update sets by parent story
+   - Validates update set names and references
+   - Prepares parent-child relationships
+
+3. **Create in ServiceNow**
+   - Creates parent update sets in ServiceNow
+   - Associates child update sets to parents
+   - Maintains bidirectional references
+   - Updates state file to prevent re-processing
+
+4. **Handle Conflicts**
+   - Detects existing update sets
+   - Updates or skips based on configuration
+   - Logs all changes and conflicts
+
+5. **Report Results**
+   - Logs successful syncs
+   - Reports failures and errors
+   - Maintains audit trail
+
+## API Integration Details
+
+### Jira API
+
+- **Endpoint**: `GET /rest/api/3/search`
+- **Query**: Searches for stories with update set custom fields
+- **Authentication**: Basic auth with API token
+
+### ServiceNow API
+
+- **Endpoint**: `POST /api/now/table/{table_name}`
+- **Endpoint**: `PATCH /api/now/table/{table_name}/{sys_id}`
+- **Authentication**: Basic auth
+
+## Logging
+
+Logs are written to both console and file (`logs/agent.log`):
+
+```
+2024-01-15 10:30:45 | INFO | Agent started | Jira-ServiceNow Agent
+2024-01-15 10:30:46 | INFO | Fetched 5 stories from Jira | count=5
+2024-01-15 10:30:48 | INFO | Created parent update set | parent_id=CHG0123456
+2024-01-15 10:30:49 | INFO | Sync completed successfully | synced=5, failed=0
+```
+
+## State Management
+
+The agent maintains state in `state/agent_state.json` to track:
+
+- Last sync timestamp
+- Processed Jira story IDs
+- Created ServiceNow update set mappings
+- Error history
+
+## Error Handling
+
+The agent implements:
+
+- **Retry Logic**: Automatic retries for transient failures
+- **Connection Pooling**: Efficient API connection management
+- **Rate Limiting**: Respects API rate limits
+- **Graceful Degradation**: Continues processing on partial failures
+- **Detailed Logging**: Logs all errors with context
+
+## Configuration Examples
+
+### Fetch Only Recent Stories
+
+Modify `jira_client.py` to add JQL filter:
+
+```python
+jql = f'project = "{self.project_key}" AND created >= -7d'
+```
+
+### Custom ServiceNow Fields
+
+Map additional fields in `servicenow_client.py`:
+
+```python
+update_set = {
+    'name': story.title,
+    'description': story.description,
+    'custom_field': story.custom_value
+}
 ```
 
 ## Troubleshooting
 
-### Check Workflow Logs
-1. Go to your repository → Actions
-2. Click on the latest "Thursday JIRA-ServiceNow Sync" run
-3. View logs in "Run workflow" step
+### Connection Errors
 
-### Common Issues
+```
+ERROR | Failed to connect to Jira
+```
 
-**"401 Unauthorized" from JIRA**
-- Verify JIRA_USERNAME and JIRA_API_TOKEN are correct
-- API token may have expired; generate a new one
+**Solution**: Verify `JIRA_BASE_URL` and API token validity
 
-**"404 Not Found" from ServiceNow**
-- Check SERVICENOW_PARENT_ID exists
-- Verify SERVICENOW_PARENT_TABLE name is correct
+### Authentication Errors
 
-**No update sets found**
-- Verify JIRA_UPDATE_SET_FIELD contains URLs
-- Check JIRA_STATUS_FILTER matches your status name exactly
-- Run a manual JIRA query to verify data exists
+```
+ERROR | Authentication failed
+```
 
-## Security Best Practices
+**Solution**: Verify credentials in `.env` file
 
-✅ All credentials stored in GitHub Secrets (encrypted)  
-✅ No credentials in code or logs  
-✅ Use service accounts (not personal accounts)  
-✅ Rotate API tokens regularly  
-✅ Enable audit logging in both JIRA and ServiceNow  
-✅ Restrict workflow permissions in repository settings  
+### Rate Limiting
 
-## Advanced Configuration
+```
+WARN | Rate limit approaching
+```
 
-### Custom JIRA JQL Query
-Edit `scripts/jira_fetch.py` to modify the JQL query for more specific filtering.
+**Solution**: Increase `RUN_INTERVAL_MINUTES` in configuration
 
-### Email Notifications
-Add email configuration to `scripts/main.py` to send results via email.
+### State File Issues
 
-### Slack Integration
-Add webhook URL as a GitHub Secret and configure in `scripts/utils.py`.
+```bash
+# Reset state to start fresh
+rm state/agent_state.json
+```
 
-## Support
+## Development
 
-For issues or questions:
-1. Check GitHub Actions logs
-2. Review JIRA and ServiceNow API documentation
-3. Open a GitHub Issue in this repository
+### Add New Integration
+
+1. Create client class in `src/new_client.py`
+2. Implement `connect()`, `fetch()`, `create()` methods
+3. Add tests in `tests/test_new_client.py`
+4. Update agent orchestrator
+
+### Extend Models
+
+Add new fields to `src/models.py`:
+
+```python
+class UpdateSet(BaseModel):
+    new_field: str
+```
+
+## Performance Tuning
+
+- Increase `RUN_INTERVAL_MINUTES` to reduce API calls
+- Filter Jira query by date to process fewer stories
+- Batch ServiceNow operations for bulk updates
+- Monitor logs for performance bottlenecks
+
+## Security Considerations
+
+1. **Never commit `.env` file** - add to `.gitignore`
+2. **Rotate API tokens** regularly
+3. **Use service accounts** for agent authentication
+4. **Encrypt sensitive data** in state files
+5. **Audit logs** regularly
+6. **Restrict network access** to authorized IPs
+
+## Contributing
+
+To contribute:
+
+1. Create a feature branch
+2. Write tests for new features
+3. Ensure all tests pass
+4. Submit a pull request
 
 ## License
 
-MIT
+MIT License - See LICENSE file
+
+## Support
+
+For issues, questions, or suggestions, please create a GitHub issue in this repository.
+
+## Roadmap
+
+- [ ] Web dashboard for monitoring
+- [ ] Webhook-based real-time sync
+- [ ] Support for multiple Jira projects
+- [ ] Custom transformation rules
+- [ ] Slack notifications
+- [ ] Database backend for state
+- [ ] Docker containerization
