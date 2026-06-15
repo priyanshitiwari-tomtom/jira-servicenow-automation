@@ -15,7 +15,8 @@ class JiraConfig(BaseModel):
     username: str = Field(default_factory=lambda: os.getenv("JIRA_USERNAME", ""))
     api_token: str = Field(default_factory=lambda: os.getenv("JIRA_API_TOKEN", ""))
     project_key: str = Field(default_factory=lambda: os.getenv("JIRA_PROJECT_KEY", ""))
-    update_set_field: str = Field(default_factory=lambda: os.getenv("JIRA_UPDATE_SET_FIELD", "customfield_10001"))
+    board_id: str = Field(default_factory=lambda: os.getenv("JIRA_BOARD_ID", "1"))
+    story_status: str = Field(default_factory=lambda: os.getenv("JIRA_STORY_STATUS", "Ready for Deployment"))
 
     @validator('base_url', 'username', 'api_token', 'project_key')
     def validate_required(cls, v):
@@ -44,11 +45,28 @@ class ServiceNowConfig(BaseModel):
         env_prefix = "SN_"
 
 
+class TeamsConfig(BaseModel):
+    """Teams configuration settings."""
+    webhook_url: str = Field(default_factory=lambda: os.getenv("TEAMS_WEBHOOK_URL", ""))
+
+    @validator('webhook_url')
+    def validate_webhook(cls, v):
+        if not v:
+            raise ValueError('Teams webhook URL is required')
+        if not v.startswith('https://'):
+            raise ValueError('Teams webhook must be HTTPS')
+        return v
+
+    class Config:
+        env_prefix = "TEAMS_"
+
+
 class AgentConfig(BaseModel):
     """Agent configuration settings."""
-    name: str = Field(default_factory=lambda: os.getenv("AGENT_NAME", "Jira-ServiceNow Agent"))
+    name: str = Field(default_factory=lambda: os.getenv("AGENT_NAME", "Jira-ServiceNow Deployment Agent"))
     log_level: str = Field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
-    run_interval_minutes: int = Field(default_factory=lambda: int(os.getenv("RUN_INTERVAL_MINUTES", "60")))
+    run_on_thursday: bool = Field(default_factory=lambda: os.getenv("RUN_ON_THURSDAY", "True").lower() == "true")
+    run_time: str = Field(default_factory=lambda: os.getenv("RUN_TIME", "09:00"))
     dry_run: bool = Field(default_factory=lambda: os.getenv("DRY_RUN", "False").lower() == "true")
     state_file_path: str = Field(default_factory=lambda: os.getenv("STATE_FILE_PATH", "./state/agent_state.json"))
     log_file_path: str = Field(default_factory=lambda: os.getenv("LOG_FILE_PATH", "./logs/agent.log"))
@@ -61,6 +79,7 @@ class AppConfig(BaseModel):
     """Complete application configuration."""
     jira: JiraConfig
     servicenow: ServiceNowConfig
+    teams: TeamsConfig
     agent: AgentConfig
 
     @staticmethod
@@ -70,6 +89,7 @@ class AppConfig(BaseModel):
             return AppConfig(
                 jira=JiraConfig(),
                 servicenow=ServiceNowConfig(),
+                teams=TeamsConfig(),
                 agent=AgentConfig()
             )
         except ValueError as e:

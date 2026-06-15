@@ -27,69 +27,27 @@ def sanitize_name(name: str) -> str:
     return sanitized
 
 
-def generate_parent_name(story_key: str, story_summary: str) -> str:
-    """Generate a parent update set name from story info.
+def generate_parent_deployment_name(sprint_name: Optional[str] = None) -> str:
+    """Generate a parent deployment update set name.
+
+    Naming format: DEPLOYMENT-{SPRINT}-{DATE}
+    Example: DEPLOYMENT-SPRINT-12-2024-06-15
 
     Args:
-        story_key: Jira story key
-        story_summary: Story summary
+        sprint_name: Jira sprint name
 
     Returns:
         Parent update set name
     """
-    # Use story key and first few words of summary
-    summary_words = story_summary.split()[:3]
-    summary_part = '_'.join(summary_words)
-    parent_name = f"parent_{story_key}_{summary_part}"
-    return sanitize_name(parent_name)
+    date_str = datetime.now().strftime('%Y-%m-%d')
 
+    if sprint_name:
+        sprint_part = sanitize_name(sprint_name)
+        parent_name = f"DEPLOYMENT-{sprint_part}-{date_str}"
+    else:
+        parent_name = f"DEPLOYMENT-{date_str}"
 
-def generate_child_name(update_set_name: str, parent_key: str) -> str:
-    """Generate a child update set name.
-
-    Args:
-        update_set_name: Original update set name
-        parent_key: Parent story key
-
-    Returns:
-        Child update set name
-    """
-    child_name = f"child_{parent_key}_{update_set_name}"
-    return sanitize_name(child_name)
-
-
-def parse_update_set_reference(text: str) -> List[str]:
-    """Parse update set references from text.
-
-    Supports patterns like:
-    - UpdateSet: ABC123
-    - Update Set - XYZ789
-    - us_ABC_123
-
-    Args:
-        text: Text to parse
-
-    Returns:
-        List of update set references
-    """
-    if not text:
-        return []
-
-    update_sets = []
-
-    # Pattern 1: "UpdateSet: ABC123" or "Update Set: XYZ"
-    pattern1 = r'[Uu]pdate[\s-]*[Ss]et[:\s]+([\w-]+)'
-    matches = re.findall(pattern1, text)
-    update_sets.extend(matches)
-
-    # Pattern 2: "us_ABC_123" or similar
-    pattern2 = r'(us_[\w]+)'
-    matches = re.findall(pattern2, text)
-    update_sets.extend(matches)
-
-    # Remove duplicates and empty values
-    update_sets = list(set(s.strip() for s in update_sets if s.strip()))
-    return update_sets
+    return parent_name
 
 
 def format_duration(seconds: float) -> str:
@@ -111,28 +69,27 @@ def format_duration(seconds: float) -> str:
         return f"{hours:.1f}h"
 
 
-def is_recent(timestamp: datetime, days: int = 7) -> bool:
-    """Check if timestamp is within recent days.
-
-    Args:
-        timestamp: Datetime to check
-        days: Number of days to consider recent
+def is_thursday() -> bool:
+    """Check if today is Thursday.
 
     Returns:
-        True if recent
+        True if today is Thursday (weekday 3)
     """
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    return timestamp > cutoff if timestamp else False
+    return datetime.now().weekday() == 3
 
 
-def batch_list(items: List, batch_size: int) -> List[List]:
-    """Split list into batches.
+def is_time_within_window(target_hour: int, target_minute: int, window_minutes: int = 5) -> bool:
+    """Check if current time is within a window of target time.
 
     Args:
-        items: List to batch
-        batch_size: Size of each batch
+        target_hour: Target hour (0-23)
+        target_minute: Target minute (0-59)
+        window_minutes: Window tolerance in minutes
 
     Returns:
-        List of batches
+        True if within window
     """
-    return [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+    now = datetime.now()
+    target_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+    delta = abs((now - target_time).total_seconds()) / 60
+    return delta <= window_minutes

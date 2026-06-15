@@ -1,11 +1,12 @@
-"""Jira API client for fetching stories and update sets."""
+"""Jira API client for fetching stories and extracting update set links from comments."""
 
 import requests
+import re
 from typing import List, Optional
 from datetime import datetime
 from requests.auth import HTTPBasicAuth
 from src.config import JiraConfig
-from src.models import JiraStory
+from src.models import JiraStory, JiraComment
 from src.logger import LoggerMixin
 
 
@@ -48,19 +49,14 @@ class JiraClient(LoggerMixin):
             self.logger.error(f"Jira API error: {e}")
             raise
 
-    def fetch_stories(self, jql: Optional[str] = None) -> List[JiraStory]:
-        """Fetch stories from Jira with update set information.
-
-        Args:
-            jql: Optional JQL query string
+    def fetch_ready_for_deployment_stories(self) -> List[JiraStory]:
+        """Fetch stories in 'Ready for Deployment' status.
 
         Returns:
-            List of JiraStory objects
+            List of JiraStory objects with update set links from comments
         """
-        if not jql:
-            jql = f'project = "{self.config.project_key}" ORDER BY updated DESC'
-
-        self.logger.info(f"Fetching stories from Jira | jql={jql}")
+        jql = f'project = "{self.config.project_key}" AND status = "{self.config.story_status}" ORDER BY updated DESC'
+        self.logger.info(f"Fetching stories in '{self.config.story_status}' status | jql={jql}")
 
         stories = []
         start_at = 0
@@ -83,6 +79,9 @@ class JiraClient(LoggerMixin):
                 for issue in response.get('issues', []):
                     story = self._parse_story(issue)
                     if story:
+                        # Fetch comments to extract update set links
+                        story.comments = self.get_story_comments(story.key)
+                        story.update_set_links = self._extract_update_set_links(story)
                         stories.append(story)
 
                 total = response.get('total', 0)
@@ -95,7 +94,7 @@ class JiraClient(LoggerMixin):
                 self.logger.error(f"Error fetching stories: {e}")
                 break
 
-        self.logger.info(f"Successfully fetched {len(stories)} stories")
+        self.logger.info(f"Successfully fetched {len(stories)} stories in '{self.config.story_status}' status")
         return stories
 
     def _parse_story(self, issue: dict) -> Optional[JiraStory]:
@@ -109,14 +108,12 @@ class JiraClient(LoggerMixin):
         """
         try:
             fields = issue.get('fields', {})
-            update_sets = self._extract_update_sets(fields)
 
             story = JiraStory(
                 key=issue.get('key'),
                 summary=fields.get('summary', ''),
                 description=fields.get('description'),
                 status=fields.get('status', {}).get('name', 'Unknown'),
-                update_sets=update_sets,
                 created=fields.get('created'),
                 updated=fields.get('updated'),
                 assignee=fields.get('assignee', {}).get('displayName'),
@@ -129,73 +126,125 @@ class JiraClient(LoggerMixin):
             self.logger.warning(f"Failed to parse story {issue.get('key')}: {e}")
             return None
 
-    def _extract_update_sets(self, fields: dict) -> List[str]:
-        """Extract update set names from issue fields.
+    def get_story_comments(self, story_key: str) -> List[JiraComment]:
+        """Get all comments for a story.
 
         Args:
-            fields: Issue fields dictionary
+            story_key: Jira story key
 
         Returns:
-            List of update set names
-        """
-        update_sets = []
-
-        # Check custom field
-        field_value = fields.get(self.config.update_set_field)
-        if field_value:
-            if isinstance(field_value, str):
-                # Single value
-                update_sets.append(field_value.strip())
-            elif isinstance(field_value, list):
-                # Multiple values
-                update_sets.extend([v.strip() for v in field_value if v])
-            elif isinstance(field_value, dict) and 'value' in field_value:
-                # Object with value
-                update_sets.append(field_value['value'].strip())
-
-        # Also check description for update set mentions
-        description = fields.get('description', '')
-        if description and isinstance(description, str):
-            # Look for patterns like "UpdateSet: XYZ" in description
-            import re
-            matches = re.findall(r'[Uu]pdate[Ss]et[:\s]+([\w-]+)', description)
-            update_sets.extend(matches)
-
-        # Remove duplicates and empty values
-        update_sets = list(set(s for s in update_sets if s))
-        return update_sets
-
-    def get_story(self, key: str) -> Optional[JiraStory]:
-        """Get a specific story by key.
-
-        Args:
-            key: Jira issue key
-
-        Returns:
-            JiraStory object or None
+            List of JiraComment objects
         """
         try:
             response = self._make_request(
                 'GET',
-                f'/rest/api/3/issues/{key}',
-                params={'fields': 'summary,description,status,assignee,reporter,labels,created,updated'}
+                f'/rest/api/3/issues/{story_key}',
+                params={'fields': 'comment'}
             )
-            return self._parse_story(response)
-        except Exception as e:
-            self.logger.error(f"Failed to get story {key}: {e}")
-            return None
 
-    def search_stories(self, query: str) -> List[JiraStory]:
-        """Search for stories by text query.
+            comments = []
+            for comment_data in response.get('fields', {}).get('comment', {}).get('comments', []):
+                comment = JiraComment(
+                    id=comment_data.get('id'),
+                    author=comment_data.get('author', {}).get('displayName'),
+                    body=comment_data.get('body', ''),
+                    created=comment_data.get('created'),
+                    updated=comment_data.get('updated')
+                )
+                comments.append(comment)
+
+            return comments
+        except Exception as e:
+            self.logger.warning(f"Failed to get comments for {story_key}: {e}")
+            return []
+
+    def _extract_update_set_links(self, story: JiraStory) -> List[str]:
+        """Extract ServiceNow update set links from story comments.
+
+        Looks for patterns:
+        - Full URLs: https://instance.service-now.com/...?sys_id=xxxxx
+        - Update set names: us_xxxxx or similar
+        - Manual references: "UpdateSet: xxxxx"
 
         Args:
-            query: Search query string
+            story: JiraStory object
 
         Returns:
-            List of matching stories
+            List of unique update set identifiers
         """
-        jql = f'project = "{self.config.project_key}" AND text ~ "{query}"'
-        return self.fetch_stories(jql)
+        update_sets = set()
+
+        # Check description
+        if story.description:
+            update_sets.update(self._parse_update_sets_from_text(story.description))
+
+        # Check comments
+        for comment in story.comments:
+            update_sets.update(self._parse_update_sets_from_text(comment.body))
+
+        return list(update_sets)
+
+    def _parse_update_sets_from_text(self, text: str) -> List[str]:
+        """Parse update set references from text.
+
+        Args:
+            text: Text to parse
+
+        Returns:
+            List of update set identifiers
+        """
+        if not text:
+            return []
+
+        update_sets = []
+
+        # Pattern 1: ServiceNow URLs with sys_id
+        # https://instance.service-now.com/nav_to.do?uri=table/sn_chg_management_update_set.do?sys_id=12345
+        pattern1 = r'sys_id=([a-f0-9]{32}|[a-f0-9]{8})'
+        matches = re.findall(pattern1, text, re.IGNORECASE)
+        update_sets.extend(matches)
+
+        # Pattern 2: Update set names like "us_xxxxx" or "UpdateSet-xxxxx"
+        pattern2 = r'(?:us|update_?set)[_-]([a-zA-Z0-9_]+)'
+        matches = re.findall(pattern2, text, re.IGNORECASE)
+        update_sets.extend([f"us_{m}" for m in matches])
+
+        # Pattern 3: Explicit "UpdateSet: xxxxx" or "Update Set Name: xxxxx"
+        pattern3 = r'[Uu]pdate[\s-]*[Ss]et[\s:]+(\S+)'
+        matches = re.findall(pattern3, text)
+        update_sets.extend(matches)
+
+        # Pattern 4: Direct sys_id references
+        pattern4 = r'(?:sys_id|ID)[\s:]+([a-f0-9]{32})'
+        matches = re.findall(pattern4, text, re.IGNORECASE)
+        update_sets.extend(matches)
+
+        # Remove duplicates and empty values
+        update_sets = list(set(s.strip() for s in update_sets if s and s.strip()))
+        return update_sets
+
+    def get_current_sprint(self) -> Optional[str]:
+        """Get the name of the current active sprint.
+
+        Returns:
+            Sprint name or None
+        """
+        try:
+            response = self._make_request(
+                'GET',
+                f'/rest/agile/1.0/board/{self.config.board_id}/sprint',
+                params={'state': 'active'}
+            )
+
+            sprints = response.get('values', [])
+            if sprints:
+                sprint_name = sprints[0].get('name', 'Unknown Sprint')
+                self.logger.info(f"Current sprint: {sprint_name}")
+                return sprint_name
+            return None
+        except Exception as e:
+            self.logger.warning(f"Failed to get current sprint: {e}")
+            return None
 
     def close(self):
         """Close the session."""

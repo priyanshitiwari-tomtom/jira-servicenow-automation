@@ -86,7 +86,8 @@ class StateManager(LoggerMixin):
             jira_key: Jira story key
             servicenow_sys_id: ServiceNow sys_id
         """
-        self.state.created_update_sets[jira_key] = servicenow_sys_id
+        if jira_key not in self.state.created_update_sets:
+            self.state.created_update_sets[jira_key] = servicenow_sys_id
         self.save_state()
 
     def get_update_set_mapping(self, jira_key: str) -> Optional[str]:
@@ -99,6 +100,15 @@ class StateManager(LoggerMixin):
             ServiceNow sys_id or None
         """
         return self.state.created_update_sets.get(jira_key)
+
+    def set_last_parent(self, parent_sys_id: str):
+        """Set the last created parent update set.
+
+        Args:
+            parent_sys_id: Parent sys_id
+        """
+        self.state.last_parent_created = parent_sys_id
+        self.save_state()
 
     def update_sync_time(self):
         """Update last sync timestamp."""
@@ -139,6 +149,7 @@ class StateManager(LoggerMixin):
         return (
             f"State Summary:\n"
             f"  Last Sync: {self.state.last_sync_time}\n"
+            f"  Last Parent: {self.state.last_parent_created}\n"
             f"  Processed Stories: {len(self.state.processed_stories)}\n"
             f"  Created Update Sets: {len(self.state.created_update_sets)}\n"
             f"  Successful Syncs: {self.state.successful_syncs}\n"

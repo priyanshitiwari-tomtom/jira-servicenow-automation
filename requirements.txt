@@ -1,9 +1,9 @@
 requests==2.31.0
 python-dotenv==1.0.0
 pydantic==2.5.0
-logging-json==1.1.1
 pytest==7.4.3
 pytest-cov==4.1.0
 colorama==0.4.6
-scheduler==0.10.0
+apscheduler==3.10.4
 click==8.1.7
+python-dateutil==2.8.2

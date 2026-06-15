@@ -48,29 +48,28 @@ class ServiceNowClient(LoggerMixin):
             self.logger.error(f"ServiceNow API error: {e}")
             raise
 
-    def create_update_set(self, update_set: UpdateSet, dry_run: bool = False) -> Optional[str]:
-        """Create an update set in ServiceNow.
+    def create_parent_deployment_set(self, parent_name: str, sprint_name: Optional[str] = None,
+                                     dry_run: bool = False) -> Optional[str]:
+        """Create a parent deployment update set.
 
         Args:
-            update_set: UpdateSet object
+            parent_name: Parent update set name
+            sprint_name: Current sprint name
             dry_run: If True, don't actually create
 
         Returns:
             Created sys_id or None
         """
         if dry_run:
-            self.logger.info(f"[DRY RUN] Would create update set | name={update_set.name}")
-            return f"dry_run_{update_set.name}"
+            self.logger.info(f"[DRY RUN] Would create parent update set | name={parent_name}")
+            return f"dry_run_{parent_name}"
 
         payload = {
-            'name': update_set.name,
-            'description': update_set.description or '',
-            'type': update_set.type,
+            'name': parent_name,
+            'description': f"Parent deployment set for {sprint_name}" if sprint_name else "Parent deployment update set",
+            'type': 'parent',
             'state': 'in_progress',
         }
-
-        if update_set.parent_update_set:
-            payload['parent'] = update_set.parent_update_set
 
         try:
             response = self._make_request(
@@ -82,39 +81,61 @@ class ServiceNowClient(LoggerMixin):
             result = response.get('result', {})
             sys_id = result.get('sys_id')
 
-            self.logger.info(f"Created update set | name={update_set.name} | sys_id={sys_id}")
+            self.logger.info(f"Created parent update set | name={parent_name} | sys_id={sys_id}")
             return sys_id
 
         except Exception as e:
-            self.logger.error(f"Failed to create update set {update_set.name}: {e}")
+            self.logger.error(f"Failed to create parent update set {parent_name}: {e}")
             return None
 
-    def update_update_set(self, sys_id: str, updates: Dict[str, Any], dry_run: bool = False) -> bool:
-        """Update an existing update set.
+    def create_child_update_set(self, update_set_name: str, parent_sys_id: str,
+                               jira_story_key: Optional[str] = None,
+                               jira_story_summary: Optional[str] = None,
+                               dry_run: bool = False) -> Optional[str]:
+        """Create a child update set under a parent.
 
         Args:
-            sys_id: SystemNow system ID
-            updates: Dictionary of fields to update
-            dry_run: If True, don't actually update
+            update_set_name: Child update set name/ID
+            parent_sys_id: Parent update set sys_id
+            jira_story_key: Reference to Jira story
+            jira_story_summary: Jira story summary
+            dry_run: If True, don't actually create
 
         Returns:
-            True if successful
+            Created sys_id or None
         """
         if dry_run:
-            self.logger.info(f"[DRY RUN] Would update update set | sys_id={sys_id} | updates={updates}")
-            return True
+            self.logger.info(f"[DRY RUN] Would create child update set | name={update_set_name} | parent={parent_sys_id}")
+            return f"dry_run_{update_set_name}"
+
+        payload = {
+            'name': update_set_name,
+            'description': f"Deployed from {jira_story_key}: {jira_story_summary}" if jira_story_key else "Child update set",
+            'type': 'child',
+            'state': 'in_progress',
+            'parent': parent_sys_id,
+        }
+
+        # Add custom field for Jira tracking
+        if jira_story_key:
+            payload['u_jira_story_key'] = jira_story_key
 
         try:
-            self._make_request(
-                'PATCH',
-                f'/api/now/table/{self.table}/{sys_id}',
-                json=updates
+            response = self._make_request(
+                'POST',
+                f'/api/now/table/{self.table}',
+                json=payload
             )
-            self.logger.info(f"Updated update set | sys_id={sys_id}")
-            return True
+
+            result = response.get('result', {})
+            sys_id = result.get('sys_id')
+
+            self.logger.info(f"Created child update set | name={update_set_name} | parent_sys_id={parent_sys_id} | sys_id={sys_id}")
+            return sys_id
+
         except Exception as e:
-            self.logger.error(f"Failed to update update set {sys_id}: {e}")
-            return False
+            self.logger.error(f"Failed to create child update set {update_set_name}: {e}")
+            return None
 
     def get_update_set(self, name: str) -> Optional[Dict[str, Any]]:
         """Get an update set by name.
@@ -158,75 +179,6 @@ class ServiceNowClient(LoggerMixin):
         except Exception as e:
             self.logger.error(f"Failed to get update set {sys_id}: {e}")
             return None
-
-    def create_parent_with_children(self, parent_name: str, child_names: List[str],
-                                   jira_story_key: Optional[str] = None,
-                                   dry_run: bool = False) -> Optional[str]:
-        """Create a parent update set with children.
-
-        Args:
-            parent_name: Parent update set name
-            child_names: List of child update set names
-            jira_story_key: Optional Jira story key for reference
-            dry_run: If True, don't actually create
-
-        Returns:
-            Parent sys_id or None
-        """
-        self.logger.info(f"Creating parent update set with {len(child_names)} children | parent={parent_name}")
-
-        # Create parent
-        parent = UpdateSet(
-            name=parent_name,
-            description=f"Parent update set for {jira_story_key}" if jira_story_key else "Parent update set",
-            type='parent',
-            jira_story_key=jira_story_key,
-            status='in_progress'
-        )
-
-        parent_sys_id = self.create_update_set(parent, dry_run=dry_run)
-        if not parent_sys_id:
-            return None
-
-        # Create children
-        for child_name in child_names:
-            child = UpdateSet(
-                name=child_name,
-                description=f"Child of {parent_name}",
-                parent_update_set=parent_sys_id,
-                type='child',
-                jira_story_key=jira_story_key,
-                status='in_progress'
-            )
-            self.create_update_set(child, dry_run=dry_run)
-
-        self.logger.info(f"Successfully created parent with children | parent_sys_id={parent_sys_id}")
-        return parent_sys_id
-
-    def get_all_update_sets(self, query: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get all update sets matching query.
-
-        Args:
-            query: Optional query filter
-
-        Returns:
-            List of update sets
-        """
-        try:
-            params = {'sysparm_limit': 500}
-            if query:
-                params['sysparm_query'] = query
-
-            response = self._make_request(
-                'GET',
-                f'/api/now/table/{self.table}',
-                params=params
-            )
-
-            return response.get('result', [])
-        except Exception as e:
-            self.logger.error(f"Failed to get update sets: {e}")
-            return []
 
     def close(self):
         """Close the session."""
